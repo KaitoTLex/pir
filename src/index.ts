@@ -1,3 +1,4 @@
+// src/index.ts
 import "dotenv/config";
 import type { RequestInit, Response } from "node-fetch";
 import {
@@ -8,6 +9,7 @@ import {
   LayoutType,
 } from "@mentra/sdk";
 
+// ---------- Helpers ----------
 function sleep(ms: number) {
   return new Promise((res) => setTimeout(res, ms));
 }
@@ -20,6 +22,7 @@ async function safeFetch(input: string, init?: RequestInit): Promise<Response> {
   return nodeFetch(input as any, init as any) as unknown as Response;
 }
 
+// ---------- Types ----------
 type NextAction =
   | "turn-left"
   | "turn-right"
@@ -35,13 +38,13 @@ interface NavStatus {
   speedKph: number;
 }
 
+// ---------- Main App ----------
 export class SimpleNavApp extends AppServer {
   private mockApiUrl: string;
   private sessionStopper = new Map<string, () => void>();
 
-  // 🟢 Centralized settings
   private mentraosSettings = {
-    CONNECTION_ACK: true, // ✅ Required by MentraOS
+    CONNECTION_ACK: true, // required by SDK
     defaultView: ViewType.MAIN,
     defaultLayout: LayoutType.TEXT_WALL,
     updateIntervalMs: 2000,
@@ -50,6 +53,7 @@ export class SimpleNavApp extends AppServer {
       flickerDurationMs: 1200,
       flickerCharset:
         "abcdefghijklmnopqrstuvwxyz0123456789<>/\\|{}[]()!@#$%^&*",
+      alertBounceCount: 3,
     },
     dashboard: {
       speedUnit: "kph",
@@ -73,7 +77,7 @@ export class SimpleNavApp extends AppServer {
 
     this.mockApiUrl =
       process.env.MOCK_API_URL ||
-      "https://mocky.io/v2/65d66e9a3000006e0f5f1234"; // replace with your mocky URL
+      "https://mocky.io/v2/replace_with_your_mockid";
   }
 
   protected async onSession(
@@ -82,33 +86,28 @@ export class SimpleNavApp extends AppServer {
     userId: string,
   ): Promise<void> {
     console.log("onSession started:", sessionId, userId);
-    await this.animateHackerText(session, "MentraNav — Commute Mode");
 
     let stopped = false;
     this.sessionStopper.set(sessionId, () => {
       stopped = true;
     });
 
-    (async () => {
-      while (!stopped) {
-        try {
-          const nav = await this.fetchNavStatus();
-          this.updateUI(session, nav);
-        } catch (err) {
-          console.warn(`[${sessionId}] fetchNavStatus error:`, err);
-          session.layouts.showReferenceCard(
-            "Network error",
-            "Unable to fetch nav data",
-            {
-              view: this.mentraosSettings.defaultView,
-              durationMs: 2500,
-            },
-          );
-        }
-        await sleep(this.mentraosSettings.updateIntervalMs);
+    // initial welcome
+    await this.animateHackerText(session, "MentraNav — Commute Mode");
+
+    // main loop: fetch nav status & cycle UI cards
+    while (!stopped) {
+      try {
+        const nav = await this.fetchNavStatus();
+        await this.cycleUI(session, nav);
+      } catch (err) {
+        console.warn(`[${sessionId}] fetchNavStatus error:`, err);
+        await this.animateHackerText(session, "Network error — retrying...");
       }
-      console.log(`[${sessionId}] polling stopped`);
-    })();
+      await sleep(this.mentraosSettings.updateIntervalMs);
+    }
+
+    console.log(`[${sessionId}] polling stopped`);
   }
 
   protected async onStop(
@@ -124,71 +123,84 @@ export class SimpleNavApp extends AppServer {
     }
   }
 
+  // ---------- Networking ----------
   private async fetchNavStatus(): Promise<NavStatus> {
     const resp = await safeFetch(this.mockApiUrl);
-    if (!resp.ok) throw new Error(`Nav API HTTP ${resp.status}`);
-    return (await resp.json()) as NavStatus;
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = (await resp.json()) as NavStatus;
+    if (
+      typeof json.speedKph !== "number" ||
+      typeof json.etaSeconds !== "number" ||
+      typeof json.distanceToNextActionMeters !== "number" ||
+      typeof json.distanceToLocationMeters !== "number" ||
+      typeof json.nextAction !== "string" ||
+      typeof json.danger !== "boolean"
+    ) {
+      throw new Error("Invalid NavStatus payload");
+    }
+    return json;
   }
 
-  private updateUI(session: AppSession, nav: NavStatus) {
-    // Speed + ETA
-    session.layouts.showDashboardCard(
-      "SPEED",
-      `${nav.speedKph.toFixed(0)} ${this.mentraosSettings.dashboard.speedUnit}`,
-      {
-        view: ViewType.DASHBOARD,
-      },
-    );
-    session.layouts.showDashboardCard(
-      "ETA",
-      `${Math.round(nav.etaSeconds / 60)} ${this.mentraosSettings.dashboard.etaUnit}`,
-      {
-        view: ViewType.DASHBOARD,
-      },
-    );
+  // ---------- UI Cycle ----------
+  private async cycleUI(session: AppSession, nav: NavStatus) {
+    // 1️⃣ Dashboard metrics
+    const dashboardTexts = [
+      `Speed: ${nav.speedKph.toFixed(1)} ${this.mentraosSettings.dashboard.speedUnit}`,
+      `ETA: ${Math.ceil(nav.etaSeconds / 60)} ${this.mentraosSettings.dashboard.etaUnit}`,
+      `Remaining: ${Math.round(nav.distanceToLocationMeters)} ${this.mentraosSettings.dashboard.distanceUnit}`,
+    ];
 
-    // Danger alert
-    if (nav.danger) {
-      session.layouts.showReferenceCard("DANGER", "Entering dangerous zone", {
-        view: this.mentraosSettings.defaultView,
-        durationMs: 4000,
-      });
+    for (const text of dashboardTexts) {
+      await this.animateHackerText(session, text, ViewType.DASHBOARD);
+      await sleep(200);
     }
 
-    // Next action
+    // 2️⃣ Next action
     const nextText =
       nav.nextAction === "arrived"
         ? "Arrived"
-        : `${nav.nextAction} in ${Math.round(nav.distanceToNextActionMeters)} ${this.mentraosSettings.dashboard.distanceUnit}`;
-    session.layouts.showDoubleTextWall("Next", nextText, {
-      view: this.mentraosSettings.defaultView,
-      durationMs: 3000,
-    });
+        : `${nav.nextAction.replace("-", " ").toUpperCase()} in ${Math.round(nav.distanceToNextActionMeters)} ${this.mentraosSettings.dashboard.distanceUnit}`;
+    await this.animateHackerText(session, `Next: ${nextText}`, ViewType.MAIN);
 
-    // Destination arrival
+    // 3️⃣ Danger alert if needed
+    if (nav.danger) {
+      for (
+        let i = 0;
+        i < this.mentraosSettings.animation.alertBounceCount;
+        i++
+      ) {
+        await this.animateHackerText(
+          session,
+          "⚠️ Danger Zone! Proceed with caution",
+          ViewType.MAIN,
+        );
+        await sleep(300);
+      }
+    }
+
+    // 4️⃣ Arrival
     if (nav.distanceToLocationMeters < 10) {
-      session.layouts.showReferenceCard(
-        "ARRIVED",
-        "You have reached your destination",
-        {
-          view: this.mentraosSettings.defaultView,
-          durationMs: 5000,
-        },
+      await this.animateHackerText(
+        session,
+        "🎯 Arrived at destination",
+        ViewType.MAIN,
       );
     }
   }
 
+  // ---------- Hacker Animation ----------
   private async animateHackerText(
     session: AppSession,
     text: string,
-  ): Promise<void> {
+    view?: ViewType,
+  ) {
+    const actualView = view || this.mentraosSettings.defaultView;
+
     // typewriter
     let out = "";
     for (let i = 0; i < text.length; i++) {
       out += text[i];
-      session.layouts.showTextWall(out, {
-        view: this.mentraosSettings.defaultView,
-      });
+      session.layouts.showTextWall(out, { view: actualView });
       await sleep(this.mentraosSettings.animation.hackerTextSpeedMs);
     }
 
@@ -201,7 +213,7 @@ export class SimpleNavApp extends AppServer {
       const s = text
         .split("")
         .map((ch) =>
-          Math.random() < 0.18
+          Math.random() < 0.2
             ? this.mentraosSettings.animation.flickerCharset[
                 Math.floor(
                   Math.random() *
@@ -211,24 +223,22 @@ export class SimpleNavApp extends AppServer {
             : ch,
         )
         .join("");
-      session.layouts.showTextWall(s, {
-        view: this.mentraosSettings.defaultView,
-      });
-      await sleep(80);
+      session.layouts.showTextWall(s, { view: actualView });
+      await sleep(60);
     }
 
-    session.layouts.showTextWall(text, {
-      view: this.mentraosSettings.defaultView,
-      durationMs: 1200,
-    });
+    // final stable
+    session.layouts.showTextWall(text, { view: actualView, durationMs: 1200 });
   }
 }
 
+// ---------- Bootstrap ----------
 async function main() {
   const app = new SimpleNavApp();
   await app.start();
-  console.log("SimpleNavApp started.");
+  console.log("SimpleNavApp started");
 }
+
 main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);
