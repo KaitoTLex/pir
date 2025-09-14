@@ -1,8 +1,7 @@
 import { AppServer, AppSession } from "@mentra/sdk";
 
 // Load configuration from environment variables
-const PACKAGE_NAME =
-  process.env.PACKAGE_NAME || "com.example.myfirstmentraosapp";
+const PACKAGE_NAME = process.env.PACKAGE_NAME || "functorsystems.hackmit";
 const PORT = parseInt(process.env.PORT || "3000");
 const MENTRAOS_API_KEY = process.env.MENTRAOS_API_KEY;
 
@@ -49,4 +48,3 @@ const server = new MyMentraOSApp({
 server.start().catch((err) => {
   console.error("Failed to start server:", err);
 });
-
