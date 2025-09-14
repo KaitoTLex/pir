@@ -1,5 +1,5 @@
 {
-  description = "Bun and Node.js development environment";
+  description = "Bun and Node.js with npm fallback for older CPUs";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -22,42 +22,23 @@
           };
         };
 
-        # Select appropriate packages for the system
-        nodejs = pkgs.nodejs_20;
-        bun =
-          if pkgs.stdenv.isLinux || pkgs.stdenv.isDarwin then
-            pkgs.bun
-          else
-            pkgs.bun.overrideAttrs (old: {
-              meta = old.meta // {
-                broken = true;
-              };
-            });
+        # Simple npm fallback for all Bun commands
+        bun = pkgs.callPackage ./bun.nix { };
 
       in
       {
         packages = {
-          inherit nodejs bun;
+          nodejs = pkgs.nodejs_20;
+          bun = bun;
           default = pkgs.buildEnv {
-            name = "mentra";
-            paths = [
-              nodejs
-              bun
-            ];
+            name = "nodejs-bun-env";
+            paths = [ bun ];
           };
         };
 
         devShells.default = pkgs.mkShell {
-          name = "mentra";
-          packages = with pkgs; [
-            nodejs
-            bun
-            ngrok
-          ];
-
-          shellHook = ''
-            echo "Node.js $(node --version) and Bun $(bun --version) environment ready"
-          '';
+          name = "nodejs-bun-shell";
+          buildInputs = [ bun ];
         };
       }
     );

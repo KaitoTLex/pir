@@ -17,6 +17,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@mentra/sdk": "latest"
+    "@mentra/sdk": "latest",
+    "node-fetch": "^3.3.2"
   }
 }
